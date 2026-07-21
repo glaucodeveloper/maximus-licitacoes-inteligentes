@@ -6,7 +6,7 @@ import {
 } from './transformers-runtime.js';
 
 export const MODEL = Object.freeze({
-  id: 'gemma-3-1b-it-int8-cpu',
+  id: 'gemma-3-1b-it-uint8-cpu-stable',
   displayName: 'Inteligência Maximus',
   approximateBytes: TRANSFORMERS_MODEL.approximateBytes,
 });

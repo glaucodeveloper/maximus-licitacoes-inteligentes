@@ -1,9 +1,10 @@
 export const TRANSFORMERS_MODEL = Object.freeze({
   id: 'onnx-community/gemma-3-1b-it-ONNX',
-  dtype: 'int8',
+  dtype: 'uint8',
   device: 'wasm',
-  cacheKey: 'maximus-licitacoes-gemma3-int8-cache',
-  markerKey: 'maximus.licitacoes.gemma3.int8.complete',
+  revision: '9909734e10b2001ee7de4a1ca33c9cfbe66ad30b',
+  cacheKey: 'maximus-licitacoes-gemma3-uint8-9909734-cache',
+  markerKey: 'maximus.licitacoes.gemma3.uint8.9909734.complete',
   approximateBytes: 1_050_000_000,
 });
 
@@ -91,7 +92,8 @@ function completeMarkerMatches() {
     const value = JSON.parse(localStorage.getItem(TRANSFORMERS_MODEL.markerKey) || 'null');
     return value?.complete === true &&
       value?.modelId === TRANSFORMERS_MODEL.id &&
-      value?.dtype === TRANSFORMERS_MODEL.dtype;
+      value?.dtype === TRANSFORMERS_MODEL.dtype &&
+      value?.revision === TRANSFORMERS_MODEL.revision;
   } catch {
     return false;
   }
@@ -99,10 +101,12 @@ function completeMarkerMatches() {
 
 function writeCompleteMarker() {
   localStorage.removeItem('maximus.licitacoes.gemma3.q4.complete');
+  localStorage.removeItem('maximus.licitacoes.gemma3.int8.complete');
   localStorage.setItem(TRANSFORMERS_MODEL.markerKey, JSON.stringify({
     complete: true,
     modelId: TRANSFORMERS_MODEL.id,
     dtype: TRANSFORMERS_MODEL.dtype,
+    revision: TRANSFORMERS_MODEL.revision,
     completedAt: new Date().toISOString(),
   }));
 }

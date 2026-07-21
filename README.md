@@ -43,7 +43,7 @@ A validação confirma o prefixo do token, a conta autenticada e o acesso ao rep
 ## Inteligência local
 
 - Modelo: `onnx-community/gemma-3-1b-it-ONNX`
-- Quantização: `int8`
+- Quantização: `uint8`
 - Execução: CPU/WebAssembly
 - Cache persistente do navegador
 
@@ -60,7 +60,4 @@ O scraping do portal é realizado no build agendado do GitHub Actions. O navegad
 
 ## Compatibilidade CPU
 
-A variante `int8` é usada porque a variante `q4` depende do operador
-`GatherBlockQuantized`, indisponível no backend WebAssembly observado em
-alguns navegadores. A atualização remove o cache q4 antigo e prepara a variante
-int8 uma única vez.
+A variante `uint8` é usada em CPU/WebAssembly. O carregamento fica fixado em uma revisão do modelo que contém `model_uint8.onnx` como arquivo único, evitando a tentativa de buscar o arquivo inexistente `model_int8.onnx_data`. A atualização remove os caches q4/int8 anteriores e prepara a variante uint8 uma única vez.

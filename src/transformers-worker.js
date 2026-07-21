@@ -1,14 +1,16 @@
 import {env, ModelRegistry, pipeline} from '@huggingface/transformers';
 
 const MODEL_ID = 'onnx-community/gemma-3-1b-it-ONNX';
-const MODEL_DTYPE = 'int8';
+const MODEL_DTYPE = 'uint8';
 const MODEL_DEVICE = 'wasm';
-const CACHE_KEY = 'maximus-licitacoes-gemma3-int8-cache';
+const MODEL_REVISION = '9909734e10b2001ee7de4a1ca33c9cfbe66ad30b';
+const CACHE_KEY = 'maximus-licitacoes-gemma3-uint8-9909734-cache';
 const TASK = 'text-generation';
 
 const MODEL_OPTIONS = Object.freeze({
   dtype: MODEL_DTYPE,
   device: MODEL_DEVICE,
+  revision: MODEL_REVISION,
 });
 
 env.allowLocalModels = false;
@@ -22,7 +24,7 @@ env.backends.onnx.wasm.numThreads = self.crossOriginIsolated
 
 let generatorPromise = null;
 let generator = null;
-let legacyCacheCleared = false;
+let legacyCachesCleared = false;
 
 function post(requestId, type, payload = null) {
   self.postMessage({requestId, type, payload});
@@ -45,9 +47,12 @@ function extractAssistantText(output) {
 }
 
 async function ensureGenerator(requestId) {
-  if (!legacyCacheCleared && 'caches' in self) {
-    await caches.delete('maximus-licitacoes-gemma3-cache').catch(() => false);
-    legacyCacheCleared = true;
+  if (!legacyCachesCleared && 'caches' in self) {
+    await Promise.all([
+      'maximus-licitacoes-gemma3-cache',
+      'maximus-licitacoes-gemma3-int8-cache',
+    ].map(key => caches.delete(key).catch(() => false)));
+    legacyCachesCleared = true;
   }
 
   if (!generatorPromise) {
