@@ -1,0 +1,23 @@
+{
+  "name": "maximus-licitacoes-inteligentes-pwa",
+  "private": true,
+  "version": "1.0.2",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "validate": "node scripts/validate.mjs",
+    "publish": "bash scripts/build-and-publish.sh",
+    "package": "bash scripts/package-zip.sh"
+  },
+  "dependencies": {
+    "fflate": "0.8.2",
+    "pdfjs-dist": "6.1.200",
+    "sql.js": "1.14.1",
+    "@huggingface/transformers": "4.2.0"
+  },
+  "devDependencies": {
+    "vite": "7.3.6"
+  }
+}

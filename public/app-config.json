@@ -1,0 +1,19 @@
+{
+  "brand": {
+    "company": "Maximus Empreendimentos",
+    "product": "Maximus Licitações Inteligentes",
+    "tagline": "Engenharia, oportunidade e decisão em uma única base."
+  },
+  "catalog": {
+    "datasetPageUrl": "https://dados.ba.gov.br/dataset/licitacoes",
+    "autoLoadOnInit": true
+  },
+  "model": {
+    "runtime": "transformers.js",
+    "id": "onnx-community/gemma-3-1b-it-ONNX",
+    "dtype": "q4",
+    "device": "wasm",
+    "maxNumTokens": 256,
+    "autoPrepareOnInit": true
+  }
+}
