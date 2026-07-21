@@ -1,4 +1,4 @@
-const CACHE_NAME = 'maximus-licitacoes-shell-v9';
+const CACHE_NAME = 'maximus-licitacoes-shell-v10';
 const MODEL_CACHE_PREFIX = 'maximus-licitacoes-gemma3-int8-cache';
 const CORE = [
   './',

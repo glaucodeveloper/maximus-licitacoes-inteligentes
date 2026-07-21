@@ -18,10 +18,11 @@
   },
   "access": {
     "required": true,
+    "tokenType": "fine-grained",
     "allowedLogins": [
       "glaucodeveloper"
     ],
-    "repository": "",
+    "repository": "glaucodeveloper/maximus-licitacoes-inteligentes",
     "rememberByDefault": true
   }
 }

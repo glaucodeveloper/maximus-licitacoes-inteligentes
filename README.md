@@ -14,20 +14,31 @@ A tela apresenta progresso percentual separado para editais e inteligência.
 
 ## Acesso
 
-Os logins autorizados ficam em `public/app-config.json`:
+O aplicativo aceita exclusivamente **fine-grained personal access tokens**, identificados pelo prefixo `github_pat_`. Tokens clássicos `ghp_` são recusados.
+
+Configuração em `public/app-config.json`:
 
 ```json
 {
   "access": {
     "required": true,
+    "tokenType": "fine-grained",
     "allowedLogins": ["glaucodeveloper"],
-    "repository": "",
+    "repository": "glaucodeveloper/maximus-licitacoes-inteligentes",
     "rememberByDefault": true
   }
 }
 ```
 
-A chave é validada na API do GitHub. Ela não é enviada ao modelo local.
+Criação recomendada no GitHub:
+
+- Resource owner: `glaucodeveloper`;
+- Repository access: `Only select repositories`;
+- repositório: `maximus-licitacoes-inteligentes`;
+- Repository permissions: `Contents: Read-only`;
+- `Metadata: Read-only` é concedida automaticamente.
+
+A validação confirma o prefixo do token, a conta autenticada e o acesso ao repositório configurado. A chave não é enviada ao modelo local.
 
 ## Inteligência local
 
