@@ -160,114 +160,31 @@ export async function importCatalogFile(file, {
   });
 }
 
-function datasetSlug(datasetPageUrl) {
-  const url = new URL(datasetPageUrl, location.href);
-  const match = url.pathname.match(/\/dataset\/([^/?#]+)/i);
-  return match?.[1] || 'licitacoes';
-}
+const BUNDLED_MANIFEST_URL = './data/licitacoes-source.json';
+const BUNDLED_ZIP_URL = './data/licitacoes.zip';
 
-function chooseZipResource(resources) {
-  const zipResources = resources.filter(resource => (
-    String(resource.format || '').toUpperCase() === 'ZIP' ||
-    /\.zip(?:$|[?#])/i.test(String(resource.url || ''))
-  ));
-
-  return zipResources.find(resource => (
-    /licitac/i.test(String(resource.name || '')) ||
-    /licitac/i.test(String(resource.url || ''))
-  )) || zipResources[0] || null;
-}
-
-async function discoverThroughCkanApi(datasetPageUrl) {
-  const page = new URL(datasetPageUrl, location.href);
-  const api = new URL('/api/3/action/package_show', page.origin);
-  api.searchParams.set('id', datasetSlug(datasetPageUrl));
-
-  const response = await fetch(api, {
+async function readBundledManifest() {
+  const response = await fetch(BUNDLED_MANIFEST_URL, {
     cache: 'no-store',
     headers: {accept: 'application/json'},
   });
 
-  if (!response.ok) throw new Error(`Catálogo remoto indisponível: HTTP ${response.status}.`);
-
-  const payload = await response.json();
-  if (!payload?.success || !payload?.result) {
-    throw new Error('O portal não retornou os metadados do catálogo.');
+  if (!response.ok) {
+    throw new Error(`A atualização de editais ainda não está disponível: HTTP ${response.status}.`);
   }
 
-  const resource = chooseZipResource(payload.result.resources || []);
-  if (!resource?.url) throw new Error('O portal não informou o arquivo ZIP de licitações.');
+  const manifest = await response.json();
 
-  const url = new URL(resource.url, page.origin).href;
-  const version = [
-    resource.id,
-    resource.last_modified,
-    resource.hash,
-    resource.size,
-    payload.result.metadata_modified,
-    url,
-  ].filter(Boolean).join('|');
-
-  return {
-    url,
-    version,
-    lastModified: resource.last_modified || payload.result.metadata_modified || '',
-    bytes: Number(resource.size) || 0,
-  };
-}
-
-async function discoverByScrapingPage(datasetPageUrl) {
-  const page = new URL(datasetPageUrl, location.href);
-  const response = await fetch(page, {cache: 'no-store'});
-  if (!response.ok) throw new Error(`Página de dados indisponível: HTTP ${response.status}.`);
-
-  const html = await response.text();
-  const document = new DOMParser().parseFromString(html, 'text/html');
-  const links = [...document.querySelectorAll('a[href]')];
-
-  const anchor = links.find(link => {
-    const href = link.getAttribute('href') || '';
-    const text = link.textContent || '';
-    return (/licitac/i.test(`${href} ${text}`) && /(?:\.zip|\/download\/)/i.test(href));
-  }) || links.find(link => /\.zip(?:$|[?#])/i.test(link.getAttribute('href') || ''));
-
-  if (!anchor) throw new Error('A página de dados não apresentou um link ZIP.');
-
-  const url = new URL(anchor.getAttribute('href'), page).href;
-  return {url, version: url, lastModified: '', bytes: 0};
-}
-
-async function discoverOfficialZip(datasetPageUrl) {
-  try {
-    return await discoverThroughCkanApi(datasetPageUrl);
-  } catch (apiError) {
-    try {
-      return await discoverByScrapingPage(datasetPageUrl);
-    } catch (pageError) {
-      throw new Error(`${apiError.message} ${pageError.message}`.trim());
-    }
+  if (
+    manifest?.complete !== true ||
+    !manifest?.version ||
+    !manifest?.sha256 ||
+    !Number.isFinite(Number(manifest?.bytes))
+  ) {
+    throw new Error('A atualização de editais publicada está incompleta.');
   }
-}
 
-async function enrichWithHead(resource) {
-  try {
-    const response = await fetch(resource.url, {
-      method: 'HEAD',
-      cache: 'no-store',
-      redirect: 'follow',
-    });
-
-    if (!response.ok) return resource;
-
-    const etag = response.headers.get('etag') || '';
-    const lastModified = response.headers.get('last-modified') || resource.lastModified || '';
-    const bytes = Number(response.headers.get('content-length')) || resource.bytes || 0;
-    const version = [resource.version, etag, lastModified, bytes].filter(Boolean).join('|');
-
-    return {...resource, version, etag, lastModified, bytes};
-  } catch {
-    return resource;
-  }
+  return manifest;
 }
 
 async function sha256Hex(blob) {
@@ -302,52 +219,61 @@ function saveSyncRecord({url, version, hash, status}) {
   }
 }
 
-export async function syncOfficialCatalog(datasetPageUrl, onProgress = () => {}) {
+export async function syncOfficialCatalog(onProgress = () => {}) {
   const existingCount = localCatalogCount();
 
   try {
-    onProgress('Verificando atualizações dos editais…');
+    onProgress('Verificando editais…');
 
-    const discovered = await discoverOfficialZip(datasetPageUrl);
-    const remote = await enrichWithHead(discovered);
+    const manifest = await readBundledManifest();
     const previous = syncRecord();
 
     if (
       previous?.status === 'ok' &&
-      previous?.versao_remota &&
-      previous.versao_remota === remote.version &&
+      previous?.versao_remota === manifest.version &&
+      previous?.hash_local === manifest.sha256 &&
       existingCount > 0
     ) {
       return {changed: false, count: existingCount};
     }
 
-    onProgress('Atualizando editais…');
+    onProgress('Incorporando editais…');
 
-    const response = await fetch(remote.url, {
+    const response = await fetch(BUNDLED_ZIP_URL, {
       cache: 'no-store',
       redirect: 'follow',
     });
 
     if (!response.ok) {
-      throw new Error(`Não foi possível baixar os editais: HTTP ${response.status}.`);
+      throw new Error(`Não foi possível carregar os editais: HTTP ${response.status}.`);
     }
 
     const blob = await response.blob();
-    if (blob.size < 100) throw new Error('O arquivo de editais recebido está vazio.');
+    const expectedBytes = Number(manifest.bytes);
+
+    if (blob.size !== expectedBytes) {
+      throw new Error(`O arquivo de editais está incompleto: ${blob.size} de ${expectedBytes} bytes.`);
+    }
 
     const signature = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
     if (signature[0] !== 0x50 || signature[1] !== 0x4b) {
-      throw new Error('O arquivo recebido não é um ZIP válido.');
+      throw new Error('O arquivo publicado para os editais não é um ZIP válido.');
     }
 
     const hash = await sha256Hex(blob);
-
-    if (previous?.status === 'ok' && previous?.hash_local === hash && existingCount > 0) {
-      saveSyncRecord({url: remote.url, version: remote.version, hash, status: 'ok'});
-      return {changed: false, count: existingCount};
+    if (hash !== manifest.sha256) {
+      throw new Error('A verificação do arquivo de editais não corresponde à versão publicada.');
     }
 
-    onProgress('Incorporando novos editais…');
+    if (previous?.status === 'ok' && previous?.hash_local === hash && existingCount > 0) {
+      saveSyncRecord({
+        url: manifest.downloadUrl || BUNDLED_ZIP_URL,
+        version: manifest.version,
+        hash,
+        status: 'ok',
+      });
+      return {changed: false, count: existingCount};
+    }
 
     const file = new File([blob], 'licitacoes.zip', {type: 'application/zip'});
     const count = await importCatalogFile(file, {
@@ -355,7 +281,12 @@ export async function syncOfficialCatalog(datasetPageUrl, onProgress = () => {})
       replaceSource: true,
     });
 
-    saveSyncRecord({url: remote.url, version: remote.version, hash, status: 'ok'});
+    saveSyncRecord({
+      url: manifest.downloadUrl || BUNDLED_ZIP_URL,
+      version: manifest.version,
+      hash,
+      status: 'ok',
+    });
 
     return {changed: true, count};
   } catch (error) {

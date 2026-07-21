@@ -174,11 +174,8 @@ function* App({id}) {
   this.syncOfficial = async ({automatic=false} = {}) => {
     if (this.state.catalogLoading) return true;
     this.patch({catalogLoading:true,error:'',catalogStatus:'Verificando editais…',status:'Verificando editais…'});
-    const datasetPageUrl = this.config.catalog?.datasetPageUrl || '';
     try {
-      if (!datasetPageUrl) throw new Error('A origem dos editais não foi configurada.');
       const result = await syncOfficialCatalog(
-        datasetPageUrl,
         status => this.patch({catalogStatus:status,status}),
       );
       await persistDatabase();
@@ -190,7 +187,6 @@ function* App({id}) {
       return true;
     } catch (error) {
       this.patch({catalogLoading:false,catalogStatus:'Editais indisponíveis',error:'Não foi possível atualizar os editais.',status:'Não foi possível atualizar os editais.'});
-      if (automatic) throw error;
       return false;
     }
   };
@@ -222,7 +218,6 @@ function* App({id}) {
       } else {
         this.patch({aiLoading:false,modelDownloading:false,aiReady:false,modelStatus:'Inteligência indisponível',error:error.message,status:'Não foi possível iniciar a análise.'});
       }
-      if (automatic) throw error;
       return false;
     }
   };
@@ -247,7 +242,7 @@ function* App({id}) {
     Object.assign(this.state,yield(this.element=((element)=>{element.id=this.id;element.component=this;if(this.element?.isConnected)this.element.replaceWith(element);return element;})(Object.assign(document.createElement('template'),{innerHTML:/* html */`
       <section class="app-shell">
         ${this.state.phase==='boot'?`<main class="splash"><div class="brand-mark">M</div><h1>Maximus Licitações Inteligentes</h1><p>${escapeHtml(this.state.status)}</p><div class="loader"></div></main>`:''}
-        ${this.state.phase==='error'?`<main class="splash"><h1>Inicialização interrompida</h1><p>${escapeHtml(this.state.error)}</p></main>`:''}
+        ${this.state.phase==='error'?`<main class="splash"><h1>Não foi possível concluir a preparação</h1><p>${escapeHtml(this.state.error)}</p></main>`:''}
         ${this.state.phase==='ready'?`
           <aside class="sidebar"><div class="brand"><div class="brand-mark">M</div><div><strong>MAXIMUS</strong><span>Licitações Inteligentes</span></div></div>
             <nav>${sidebarButton(this.id,'editais','Editais','⌁',this.state.page)}${sidebarButton(this.id,'empresa','Empresa','◆',this.state.page)}${sidebarButton(this.id,'documentos','Documentos','▤',this.state.page)}${sidebarButton(this.id,'matriz','Matriz','▦',this.state.page)}${sidebarButton(this.id,'prompts','Configuração','✦',this.state.page)}${sidebarButton(this.id,'inteligencia','Inteligência','◎',this.state.page)}</nav>

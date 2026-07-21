@@ -1,15 +1,17 @@
 {
   "name": "maximus-licitacoes-inteligentes-pwa",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.4",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "vite build",
+    "build": "node scripts/scrape-licitacoes.mjs && vite build",
     "preview": "vite preview --host 0.0.0.0",
     "validate": "node scripts/validate.mjs",
     "publish": "bash scripts/build-and-publish.sh",
-    "package": "bash scripts/package-zip.sh"
+    "package": "bash scripts/package-zip.sh",
+    "scrape:catalog": "node scripts/scrape-licitacoes.mjs",
+    "build:app": "vite build"
   },
   "dependencies": {
     "fflate": "0.8.2",

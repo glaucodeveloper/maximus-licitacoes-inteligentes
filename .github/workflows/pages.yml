@@ -1,19 +1,26 @@
 name: Publicar Maximus Licitações PWA
+
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: '20 11 * * *'
   workflow_dispatch:
+
 permissions:
   contents: read
   pages: write
   id-token: write
+
 concurrency:
   group: github-pages
   cancel-in-progress: true
+
 jobs:
   build:
     env:
       NODE_OPTIONS: --use-system-ca
+      LICITACOES_DATASET_PAGE: https://dados.ba.gov.br/dataset/licitacoes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -21,12 +28,21 @@ jobs:
         with:
           node-version: 24
       - uses: actions/configure-pages@v5
+      - name: Recuperar última versão do catálogo
+        uses: actions/cache@v4
+        with:
+          path: public/data
+          key: licitacoes-catalog-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            licitacoes-catalog-${{ runner.os }}-
       - run: npm install --registry=https://registry.npmjs.org
       - run: npm run validate
+      - run: node --check scripts/scrape-licitacoes.mjs
       - run: npm run build
       - uses: actions/upload-pages-artifact@v4
         with:
           path: ./dist
+
   deploy:
     environment:
       name: github-pages

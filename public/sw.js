@@ -1,4 +1,4 @@
-const CACHE_NAME = 'maximus-licitacoes-shell-v5';
+const CACHE_NAME = 'maximus-licitacoes-shell-v7';
 const MODEL_CACHE_PREFIX = 'maximus-licitacoes-gemma3-cache';
 const CORE = [
   './',
@@ -67,6 +67,10 @@ self.addEventListener('fetch', event => {
 
   if (request.headers.has('range')) return;
 
+  // O catálogo grande não é duplicado no cache do shell. Ele só é carregado
+  // quando o manifesto publicado indica uma nova versão.
+  if (url.pathname.endsWith('/data/licitacoes.zip')) return;
+
   if (
     request.mode === 'navigate' ||
     request.destination === 'script' ||
@@ -74,6 +78,7 @@ self.addEventListener('fetch', event => {
     request.destination === 'worker' ||
     url.pathname.includes('/assets/') ||
     url.pathname.endsWith('/app-config.json') ||
+    url.pathname.endsWith('/data/licitacoes-source.json') ||
     url.pathname.endsWith('/manifest.webmanifest') ||
     url.pathname.endsWith('/sw.js')
   ) {

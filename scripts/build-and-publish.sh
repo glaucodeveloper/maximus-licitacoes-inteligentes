@@ -32,9 +32,11 @@ node --check src/ai.js
 node --check src/catalog.js
 node --check src/transformers-worker.js
 node --check src/transformers-runtime.js
+node --check scripts/scrape-licitacoes.mjs
 
-echo 'Compilando aplicação...'
-NODE_OPTIONS=--use-system-ca npm run build
+echo 'Compilando aplicação local...'
+# O scraping ocorre no GitHub Actions. O build local não depende do TLS do portal.
+NODE_OPTIONS=--use-system-ca npm run build:app
 
 if ! gh repo view "$OWNER/$REPO" >/dev/null 2>&1; then
   echo "Criando $OWNER/$REPO..."
@@ -66,6 +68,8 @@ find "$TARGET" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
     --exclude='./node_modules' \
     --exclude='./dist' \
     --exclude='./*.zip' \
+    --exclude='./public/data/licitacoes.zip' \
+    --exclude='./public/data/licitacoes-source.json' \
     -cf - .
 ) | (
   cd "$TARGET"

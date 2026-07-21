@@ -3,3 +3,6 @@ dist/
 public/wasm/
 *.zip
 .DS_Store
+public/data/licitacoes.zip
+public/data/licitacoes-source.json
+public/data/*.download

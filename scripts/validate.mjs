@@ -1,5 +1,5 @@
 import {readFile, access} from 'node:fs/promises';
-const files=['index.html','src/main.js','src/component.js','src/db.js','src/schema.js','src/catalog.js','src/pdf.js','src/ai.js','src/transformers-runtime.js','src/transformers-worker.js','public/sw.js','public/manifest.webmanifest'];
+const files=['index.html','src/main.js','src/component.js','src/db.js','src/schema.js','src/catalog.js','src/pdf.js','src/ai.js','src/transformers-runtime.js','src/transformers-worker.js','public/sw.js','public/manifest.webmanifest','scripts/scrape-licitacoes.mjs'];
 for(const file of files) await access(file);
 const component=await readFile('src/component.js','utf8');
 const main=await readFile('src/main.js','utf8');
