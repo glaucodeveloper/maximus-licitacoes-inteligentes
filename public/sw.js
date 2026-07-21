@@ -1,5 +1,5 @@
-const CACHE_NAME = 'maximus-licitacoes-shell-v7';
-const MODEL_CACHE_PREFIX = 'maximus-licitacoes-gemma3-cache';
+const CACHE_NAME = 'maximus-licitacoes-shell-v9';
+const MODEL_CACHE_PREFIX = 'maximus-licitacoes-gemma3-int8-cache';
 const CORE = [
   './',
   './index.html',

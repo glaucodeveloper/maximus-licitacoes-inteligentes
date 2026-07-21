@@ -1,9 +1,15 @@
-import {env, pipeline} from '@huggingface/transformers';
+import {env, ModelRegistry, pipeline} from '@huggingface/transformers';
 
 const MODEL_ID = 'onnx-community/gemma-3-1b-it-ONNX';
-const MODEL_DTYPE = 'q4';
+const MODEL_DTYPE = 'int8';
 const MODEL_DEVICE = 'wasm';
-const CACHE_KEY = 'maximus-licitacoes-gemma3-cache';
+const CACHE_KEY = 'maximus-licitacoes-gemma3-int8-cache';
+const TASK = 'text-generation';
+
+const MODEL_OPTIONS = Object.freeze({
+  dtype: MODEL_DTYPE,
+  device: MODEL_DEVICE,
+});
 
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
@@ -16,6 +22,7 @@ env.backends.onnx.wasm.numThreads = self.crossOriginIsolated
 
 let generatorPromise = null;
 let generator = null;
+let legacyCacheCleared = false;
 
 function post(requestId, type, payload = null) {
   self.postMessage({requestId, type, payload});
@@ -27,10 +34,7 @@ function extractAssistantText(output) {
   if (Array.isArray(generated)) {
     for (let index = generated.length - 1; index >= 0; index -= 1) {
       const message = generated[index];
-      if (message?.role === 'assistant' && typeof message.content === 'string') {
-        return message.content.trim();
-      }
-      if (message?.role === 'model' && typeof message.content === 'string') {
+      if ((message?.role === 'assistant' || message?.role === 'model') && typeof message.content === 'string') {
         return message.content.trim();
       }
     }
@@ -41,13 +45,17 @@ function extractAssistantText(output) {
 }
 
 async function ensureGenerator(requestId) {
+  if (!legacyCacheCleared && 'caches' in self) {
+    await caches.delete('maximus-licitacoes-gemma3-cache').catch(() => false);
+    legacyCacheCleared = true;
+  }
+
   if (!generatorPromise) {
     generatorPromise = pipeline(
-      'text-generation',
+      TASK,
       MODEL_ID,
       {
-        dtype: MODEL_DTYPE,
-        device: MODEL_DEVICE,
+        ...MODEL_OPTIONS,
         progress_callback: progress => post(requestId, 'progress', progress),
       },
     ).then(value => {
@@ -67,6 +75,21 @@ self.addEventListener('message', async event => {
   const {requestId, type, payload} = event.data ?? {};
 
   try {
+    if (type === 'cache-status') {
+      const cached = await ModelRegistry.is_pipeline_cached(TASK, MODEL_ID, MODEL_OPTIONS);
+      post(requestId, 'result', {cached});
+      return;
+    }
+
+    if (type === 'clear-cache') {
+      if (generator?.dispose) await generator.dispose();
+      generator = null;
+      generatorPromise = null;
+      const result = await ModelRegistry.clear_pipeline_cache(TASK, MODEL_ID, MODEL_OPTIONS);
+      post(requestId, 'result', result);
+      return;
+    }
+
     if (type === 'load') {
       await ensureGenerator(requestId);
       post(requestId, 'result', {ready: true});

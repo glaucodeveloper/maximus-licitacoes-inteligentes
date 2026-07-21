@@ -3,8 +3,9 @@ import {initDatabase, rows, one, run, transaction, persistDatabase} from './db.j
 import {syncOfficialCatalog} from './catalog.js';
 import {extractPdfText} from './pdf.js';
 import {askLocalAI, disposeLocalAI, loadLocalAI, UnsafeModelOutputError} from './ai.js';
-import {downloadModel, hasModel} from './model-store.js';
+import {downloadModel, formatBytes, hasModel} from './model-store.js';
 import {isStandalone, registerServiceWorker} from './pwa.js';
+import {clearAccessToken, loadAccessToken, saveAccessToken, validateAccessToken} from './access.js';
 
 const PAGES = ['editais','empresa','documentos','matriz','prompts','inteligencia'];
 
@@ -130,7 +131,7 @@ function* App({id}) {
   this.config = null;
   this.installPrompt = null;
   this.catalogAll = [];
-  this.state = {phase:'boot', page:'editais', status:'Preparando a aplicação…', error:'', busy:false, catalogLoading:false, catalogStatus:'Preparando editais', editais:[], currentEdital:null, selectedEditalId:0, empresa:null, documentos:[], requisitos:[], matriz:[], prompts:[], modelStored:false, aiReady:false, aiLoading:false, modelDownloading:false, modelProgress:0, modelStatus:'Preparando análise', installed:isStandalone()};
+  this.state = {phase:'boot', page:'editais', status:'Preparando a aplicação…', error:'', busy:false, accessIdentity:null, bootStage:'Inicialização', bootProgress:0, bootReceived:0, bootTotal:0, catalogLoading:false, catalogProgress:0, catalogStatus:'Preparando editais', editais:[], currentEdital:null, selectedEditalId:0, empresa:null, documentos:[], requisitos:[], matriz:[], prompts:[], modelStored:false, aiReady:false, aiLoading:false, modelDownloading:false, modelProgress:0, modelReceived:0, modelTotal:0, modelStatus:'Preparando análise', installed:isStandalone()};
   this.patch = patch => this.next(patch);
 
   this.refresh = async () => {
@@ -150,13 +151,61 @@ function* App({id}) {
         if (!response.ok) throw new Error(`Configuração indisponível: HTTP ${response.status}.`);
         return response.json();
       });
-      await initDatabase();
-      await this.refresh();
-      this.patch({phase:'boot',status:'Preparando editais e análise…'});
-      await this.initializeOnStart();
-      await this.refresh();
-      this.patch({phase:'ready',status:'Aplicação pronta.'});
-    } catch (error) { this.patch({phase:'error',error:error.message,status:'Não foi possível iniciar a plataforma.'}); }
+
+      if (this.config.access?.required !== false) {
+        const token = loadAccessToken();
+        if (!token) {
+          this.patch({phase:'auth',status:'Acesso reservado.',error:''});
+          return;
+        }
+
+        try {
+          const identity = await validateAccessToken(this.config, token);
+          this.patch({accessIdentity:identity});
+        } catch (error) {
+          clearAccessToken();
+          this.patch({phase:'auth',status:'Acesso reservado.',error:error.message});
+          return;
+        }
+      }
+
+      await this.startApplication();
+    } catch (error) {
+      this.patch({phase:'error',error:error.message,status:'Não foi possível iniciar a plataforma.'});
+    }
+  };
+
+  this.startApplication = async () => {
+    this.patch({phase:'boot',error:'',bootStage:'Inicialização',bootProgress:1,bootReceived:0,bootTotal:0,status:'Preparando a aplicação…'});
+    await initDatabase();
+    await this.refresh();
+    await this.initializeOnStart();
+    await this.refresh();
+    this.patch({phase:'ready',bootProgress:100,status:'Aplicação pronta.'});
+  };
+
+  this.submitAccess = async () => {
+    if (this.state.busy) return;
+    const input = document.querySelector('#access-token');
+    const token = input?.value.trim() || '';
+    const remember = Boolean(document.querySelector('#remember-access')?.checked);
+
+    this.patch({busy:true,error:'',status:'Validando acesso…'});
+
+    try {
+      const identity = await validateAccessToken(this.config, token);
+      saveAccessToken(token, remember);
+      this.patch({busy:false,accessIdentity:identity});
+      await this.startApplication();
+    } catch (error) {
+      this.patch({busy:false,phase:'auth',error:error.message,status:'Acesso não autorizado.'});
+    }
+  };
+
+  this.logoutAccess = async () => {
+    await disposeLocalAI();
+    clearAccessToken();
+    this.patch({phase:'auth',accessIdentity:null,aiReady:false,error:'',status:'Acesso encerrado.'});
   };
 
   this.initializeOnStart = async () => {
@@ -173,43 +222,73 @@ function* App({id}) {
   this.filterEditais = query => { const q=String(query||'').toLowerCase(); this.patch({editais:this.catalogAll.filter(e => `${e.numero} ${e.orgao} ${e.objeto}`.toLowerCase().includes(q))}); };
   this.syncOfficial = async ({automatic=false} = {}) => {
     if (this.state.catalogLoading) return true;
-    this.patch({catalogLoading:true,error:'',catalogStatus:'Verificando editais…',status:'Verificando editais…'});
+    this.patch({catalogLoading:true,error:'',catalogProgress:0,catalogStatus:'Verificando editais…',bootStage:'Editais',bootProgress:0,bootReceived:0,bootTotal:0,status:'Verificando editais…'});
     try {
-      const result = await syncOfficialCatalog(
-        status => this.patch({catalogStatus:status,status}),
-      );
+      const result = await syncOfficialCatalog(update => {
+        const detail = typeof update === 'string'
+          ? {label:update,percent:this.state.catalogProgress}
+          : update;
+        const percent = Math.max(this.state.catalogProgress, Number(detail.percent) || 0);
+        const label = detail.label || 'Preparando editais';
+        this.patch({
+          catalogProgress:percent,
+          catalogStatus:label,
+          bootStage:'Editais',
+          bootProgress:percent,
+          bootReceived:Number(detail.received) || 0,
+          bootTotal:Number(detail.total) || 0,
+          status:label,
+        });
+      });
       await persistDatabase();
       await this.refresh();
       const status = result.changed
         ? `${result.count} editais atualizados.`
         : `${result.count} editais disponíveis.`;
-      this.patch({catalogLoading:false,catalogStatus:status,status});
+      this.patch({catalogLoading:false,catalogProgress:100,catalogStatus:status,bootStage:'Editais',bootProgress:100,status});
       return true;
     } catch (error) {
       this.patch({catalogLoading:false,catalogStatus:'Editais indisponíveis',error:'Não foi possível atualizar os editais.',status:'Não foi possível atualizar os editais.'});
       return false;
     }
   };
+
   this.saveEmpresa = async () => { const values=['razao','cnpj','porte','municipio','estado','cidade','objeto','cnae','responsavel'].map(k => document.querySelector(`#empresa-${k}`)?.value||''); run(`UPDATE empresa SET razao_social=?,cnpj=?,porte=?,municipio=?,estado=?,cidade_base=?,objeto_social=?,cnae_principal=?,responsavel_cadastro=? WHERE id=(SELECT id FROM empresa LIMIT 1)`,values); await this.refresh(); this.patch({status:'Dados da empresa salvos.'}); };
   this.openDocument = () => document.querySelector('#document-file')?.click();
   this.uploadDocument = async () => { const input=document.querySelector('#document-file'); const file=input?.files?.[0]; if(!file)return; this.patch({busy:true,error:'',status:`Lendo ${file.name} no dispositivo…`}); try{let text=''; if(file.type==='application/pdf'||file.name.toLowerCase().endsWith('.pdf')){const extracted=await extractPdfText(file, ({page,total}) => this.patch({status:`Lendo página ${page} de ${total}…`})); text=extracted.text;}else{text=await file.text();} run(`INSERT INTO documento (empresa_id,tipo,nome,status,texto_extraido,inferencia_status,criado_em) VALUES ((SELECT id FROM empresa LIMIT 1),?,?,?,?,?,datetime('now'))`,['Documento técnico',file.name,'leitura concluída',text,'pendente']); await this.refresh(); this.patch({busy:false,status:`${file.name} adicionado aos documentos.`});}catch(error){this.patch({busy:false,error:error.message,status:'O documento não pôde ser processado.'});}finally{if(input)input.value='';} };
   this.confirmDocumento = async id => { run(`UPDATE documento SET status='confirmado pelo usuário',confirmado_em=datetime('now'),confirmado_por=(SELECT responsavel_cadastro FROM empresa LIMIT 1) WHERE id=?`,[id]); await this.refresh(); this.patch({status:'Documento confirmado.'}); };
   this.prepareAI = async ({automatic=false} = {}) => {
     if (this.state.aiLoading || this.state.aiReady) return true;
-    this.patch({aiLoading:true,error:'',modelStatus:'Preparando a análise…'});
+    this.patch({aiLoading:true,error:'',bootStage:'Inteligência',bootProgress:0,bootReceived:0,bootTotal:0,modelStatus:'Preparando a análise…',status:'Preparando a análise…'});
     try {
-      if (!(await hasModel())) {
-        this.patch({modelDownloading:true,modelStatus:'Preparando a análise…',status:'Preparando a análise…'});
+      const modelStored = await hasModel();
+      this.patch({modelStored});
+
+      if (!modelStored) {
+        this.patch({modelDownloading:true,modelProgress:0,modelReceived:0,modelTotal:0,modelStatus:'Baixando inteligência…',status:'Baixando inteligência…'});
         await downloadModel({
-          onProgress:({ratio}) => {
-            const progress = Math.round(ratio*100);
-            this.patch({modelProgress:progress,modelStatus:`Transferindo inteligência local: ${progress}%`});
+          onProgress:({ratio,received,total,percent}) => {
+            const progress = Math.max(this.state.modelProgress, Number(percent) || Math.round((Number(ratio) || 0) * 100));
+            this.patch({
+              modelProgress:progress,
+              modelReceived:Number(received) || 0,
+              modelTotal:Number(total) || 0,
+              modelStatus:`Baixando inteligência: ${progress}%`,
+              bootStage:'Inteligência',
+              bootProgress:progress,
+              bootReceived:Number(received) || 0,
+              bootTotal:Number(total) || 0,
+              status:`Baixando inteligência: ${progress}%`,
+            });
           },
         });
+      } else {
+        this.patch({modelProgress:100,bootProgress:100,modelStatus:'Inteligência disponível neste dispositivo.',status:'Ativando inteligência…'});
       }
-      this.patch({modelStatus:'Finalizando a preparação…',status:'Finalizando a preparação…'});
+
+      this.patch({modelStatus:'Ativando inteligência…',status:'Ativando inteligência…',bootStage:'Inteligência',bootProgress:100});
       await loadLocalAI({maxNumTokens:this.config.model.maxNumTokens});
-      this.patch({aiLoading:false,modelDownloading:false,modelStored:true,aiReady:true,modelStatus:'Inteligência validada e ativa',status:'Inteligência ativa para análise de licitações.'});
+      this.patch({aiLoading:false,modelDownloading:false,modelStored:true,aiReady:true,modelProgress:100,bootProgress:100,modelStatus:'Inteligência ativa',status:'Inteligência ativa para análise de licitações.'});
       return true;
     } catch (error) {
       if (error?.code === 'UNSAFE_MODEL_OUTPUT' || error instanceof UnsafeModelOutputError) {
@@ -221,6 +300,7 @@ function* App({id}) {
       return false;
     }
   };
+
   this.analyzeSelectedEdital = async () => { const edital=this.state.currentEdital; if(!edital||!this.state.aiReady)return; this.patch({busy:true,error:'',status:'Analisando exigências e riscos do edital…'}); try{const instruction=one(`SELECT instrucao FROM prompt_operational WHERE chave='edital_requisitos'`)?.instrucao||''; const response=await askLocalAI(`${instruction}\n\nDADOS DO EDITAL:\n${JSON.stringify(edital,null,2)}\n\nResponda somente JSON no formato {"requirements":[{"categoria":"","titulo":"","descricao":"","obrigatorio":true,"pagina":0,"risco":"","acao_licitante":""}]}.`); const parsed=parseJsonLoose(response); if(!parsed?.requirements?.length) throw new Error('A análise não retornou requisitos estruturados.'); transaction(()=>{let doc=one('SELECT id FROM edital_documento WHERE licitacao_id=?',[edital.id]); const docId=doc?.id||run(`INSERT INTO edital_documento (licitacao_id,url,status_download,status_analise,data_analise,inferencia_status,inferencia_json) VALUES (?,?,?,?,datetime('now'),?,?)`,[edital.id,'','dados do edital','analisado','análise concluída',response]); run('DELETE FROM requisito WHERE topico_id IN (SELECT t.id FROM edital_topico t JOIN edital_fase f ON f.id=t.fase_id WHERE f.edital_documento_id=?)',[docId]); run('DELETE FROM edital_topico WHERE fase_id IN (SELECT id FROM edital_fase WHERE edital_documento_id=?)',[docId]); run('DELETE FROM edital_fase WHERE edital_documento_id=?',[docId]); const faseId=run('INSERT INTO edital_fase (edital_documento_id,nome,ordem) VALUES (?,?,1)',[docId,'Requisitos identificados na leitura']); const topicoId=run('INSERT INTO edital_topico (fase_id,titulo,ordem) VALUES (?,?,1)',[faseId,'Requisitos do edital']); for(const req of parsed.requirements){run(`INSERT INTO requisito (topico_id,categoria,titulo,descricao,obrigatorio,pagina,risco,acao_licitante) VALUES (?,?,?,?,?,?,?,?)`,[topicoId,req.categoria||'',req.titulo||'',req.descricao||'',req.obrigatorio?1:0,Number(req.pagina)||0,req.risco||'',req.acao_licitante||'']);}}); await this.refresh(); this.patch({busy:false,status:`${parsed.requirements.length} requisitos identificados.`});}catch(error){
     if(error?.code==='UNSAFE_MODEL_OUTPUT'||error instanceof UnsafeModelOutputError){
       await disposeLocalAI();
@@ -241,12 +321,13 @@ function* App({id}) {
   while(true){
     Object.assign(this.state,yield(this.element=((element)=>{element.id=this.id;element.component=this;if(this.element?.isConnected)this.element.replaceWith(element);return element;})(Object.assign(document.createElement('template'),{innerHTML:/* html */`
       <section class="app-shell">
-        ${this.state.phase==='boot'?`<main class="splash"><div class="brand-mark">M</div><h1>Maximus Licitações Inteligentes</h1><p>${escapeHtml(this.state.status)}</p><div class="loader"></div></main>`:''}
+        ${this.state.phase==='auth'?`<main class="splash access-splash"><div class="brand-mark">M</div><h1>Maximus Licitações Inteligentes</h1><p>Acesso reservado</p><div class="access-form"><label><span>Chave de acesso</span><input id="access-token" type="password" autocomplete="off" placeholder="github_pat_…" onkeydown="if(event.key==='Enter')document.getElementById('${this.id}').component.submitAccess()"></label><label class="remember-access"><input id="remember-access" type="checkbox" ${this.config?.access?.rememberByDefault!==false?'checked':''}><span>Manter acesso neste dispositivo</span></label><button class="primary wide" ${this.state.busy?'disabled':''} onclick="document.getElementById('${this.id}').component.submitAccess()">${this.state.busy?'Validando…':'Entrar'}</button></div>${this.state.error?`<div class="access-error">${escapeHtml(this.state.error)}</div>`:''}</main>`:''}
+        ${this.state.phase==='boot'?`<main class="splash"><div class="brand-mark">M</div><h1>Maximus Licitações Inteligentes</h1><p class="progress-stage">${escapeHtml(this.state.bootStage)}</p><div class="boot-progress"><div style="width:${Math.max(0,Math.min(100,this.state.bootProgress))}%"></div></div><strong class="progress-percent">${Math.round(this.state.bootProgress)}%</strong><p>${escapeHtml(this.state.status)}</p>${this.state.bootTotal?`<small>${formatBytes(this.state.bootReceived)} de ${formatBytes(this.state.bootTotal)}</small>`:''}</main>`:''}
         ${this.state.phase==='error'?`<main class="splash"><h1>Não foi possível concluir a preparação</h1><p>${escapeHtml(this.state.error)}</p></main>`:''}
         ${this.state.phase==='ready'?`
           <aside class="sidebar"><div class="brand"><div class="brand-mark">M</div><div><strong>MAXIMUS</strong><span>Licitações Inteligentes</span></div></div>
             <nav>${sidebarButton(this.id,'editais','Editais','⌁',this.state.page)}${sidebarButton(this.id,'empresa','Empresa','◆',this.state.page)}${sidebarButton(this.id,'documentos','Documentos','▤',this.state.page)}${sidebarButton(this.id,'matriz','Matriz','▦',this.state.page)}${sidebarButton(this.id,'prompts','Configuração','✦',this.state.page)}${sidebarButton(this.id,'inteligencia','Inteligência','◎',this.state.page)}</nav>
-            <div class="sidebar-footer"><button class="ghost wide" onclick="document.getElementById('${this.id}').component.install()">${this.state.installed?'Aplicativo instalado':'Instalar aplicativo'}</button></div>
+            <div class="sidebar-footer"><button class="ghost wide" onclick="document.getElementById('${this.id}').component.install()">${this.state.installed?'Aplicativo instalado':'Instalar aplicativo'}</button><button class="ghost wide" onclick="document.getElementById('${this.id}').component.logoutAccess()">Sair</button></div>
           </aside>
           <main class="workspace"><header class="topbar"><div><h1>${this.state.page==='editais'?'Editais':this.state.page==='empresa'?'Empresa':this.state.page==='documentos'?'Documentos':this.state.page==='matriz'?'Matriz documental':this.state.page==='prompts'?'Configuração':'Inteligência'}</h1></div><div class="runtime"><span class="dot ${this.state.aiReady?'online':''}"></span>${this.state.aiReady?'Análise pronta':'Análise indisponível'}</div></header>
             ${this.state.error ? `<div class="statusbar error">${escapeHtml(this.state.error)}</div>` : this.state.busy || this.state.catalogLoading || this.state.aiLoading ? `<div class="statusbar">${escapeHtml(this.state.status)}</div>` : ``}

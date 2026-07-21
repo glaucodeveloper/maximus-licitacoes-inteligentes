@@ -163,6 +163,17 @@ export async function importCatalogFile(file, {
 const BUNDLED_MANIFEST_URL = './data/licitacoes-source.json';
 const BUNDLED_ZIP_URL = './data/licitacoes.zip';
 
+function notify(onProgress, detail) {
+  onProgress({
+    phase: 'catalog',
+    label: 'Preparando editais',
+    percent: 0,
+    received: 0,
+    total: 0,
+    ...detail,
+  });
+}
+
 async function readBundledManifest() {
   const response = await fetch(BUNDLED_MANIFEST_URL, {
     cache: 'no-store',
@@ -194,6 +205,53 @@ async function sha256Hex(blob) {
     .join('');
 }
 
+async function downloadCatalogBlob(expectedBytes, onProgress) {
+  const response = await fetch(BUNDLED_ZIP_URL, {
+    cache: 'no-store',
+    redirect: 'follow',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Não foi possível carregar os editais: HTTP ${response.status}.`);
+  }
+
+  if (!response.body) {
+    const blob = await response.blob();
+    notify(onProgress, {
+      label: 'Baixando editais',
+      percent: 90,
+      received: blob.size,
+      total: expectedBytes,
+    });
+    return blob;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0;
+  let lastPercent = -1;
+
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.byteLength;
+
+    const percent = Math.min(90, Math.floor((received / expectedBytes) * 90));
+    if (percent !== lastPercent) {
+      lastPercent = percent;
+      notify(onProgress, {
+        label: 'Baixando editais',
+        percent,
+        received,
+        total: expectedBytes,
+      });
+    }
+  }
+
+  return new Blob(chunks, {type: 'application/zip'});
+}
+
 function localCatalogCount() {
   return Number(one('SELECT COUNT(*) AS total FROM licitacao')?.total || 0);
 }
@@ -223,7 +281,7 @@ export async function syncOfficialCatalog(onProgress = () => {}) {
   const existingCount = localCatalogCount();
 
   try {
-    onProgress('Verificando editais…');
+    notify(onProgress, {label: 'Verificando editais', percent: 2});
 
     const manifest = await readBundledManifest();
     const previous = syncRecord();
@@ -234,26 +292,28 @@ export async function syncOfficialCatalog(onProgress = () => {}) {
       previous?.hash_local === manifest.sha256 &&
       existingCount > 0
     ) {
+      notify(onProgress, {
+        label: 'Editais atualizados',
+        percent: 100,
+        received: Number(manifest.bytes),
+        total: Number(manifest.bytes),
+      });
       return {changed: false, count: existingCount};
     }
 
-    onProgress('Incorporando editais…');
-
-    const response = await fetch(BUNDLED_ZIP_URL, {
-      cache: 'no-store',
-      redirect: 'follow',
-    });
-
-    if (!response.ok) {
-      throw new Error(`Não foi possível carregar os editais: HTTP ${response.status}.`);
-    }
-
-    const blob = await response.blob();
     const expectedBytes = Number(manifest.bytes);
+    const blob = await downloadCatalogBlob(expectedBytes, onProgress);
 
     if (blob.size !== expectedBytes) {
       throw new Error(`O arquivo de editais está incompleto: ${blob.size} de ${expectedBytes} bytes.`);
     }
+
+    notify(onProgress, {
+      label: 'Validando editais',
+      percent: 94,
+      received: blob.size,
+      total: expectedBytes,
+    });
 
     const signature = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
     if (signature[0] !== 0x50 || signature[1] !== 0x4b) {
@@ -272,8 +332,21 @@ export async function syncOfficialCatalog(onProgress = () => {}) {
         hash,
         status: 'ok',
       });
+      notify(onProgress, {
+        label: 'Editais atualizados',
+        percent: 100,
+        received: blob.size,
+        total: expectedBytes,
+      });
       return {changed: false, count: existingCount};
     }
+
+    notify(onProgress, {
+      label: 'Incorporando editais',
+      percent: 97,
+      received: blob.size,
+      total: expectedBytes,
+    });
 
     const file = new File([blob], 'licitacoes.zip', {type: 'application/zip'});
     const count = await importCatalogFile(file, {
@@ -288,9 +361,17 @@ export async function syncOfficialCatalog(onProgress = () => {}) {
       status: 'ok',
     });
 
+    notify(onProgress, {
+      label: 'Editais prontos',
+      percent: 100,
+      received: blob.size,
+      total: expectedBytes,
+    });
+
     return {changed: true, count};
   } catch (error) {
     if (existingCount > 0) {
+      notify(onProgress, {label: 'Editais disponíveis', percent: 100});
       return {changed: false, count: existingCount, offline: true};
     }
 

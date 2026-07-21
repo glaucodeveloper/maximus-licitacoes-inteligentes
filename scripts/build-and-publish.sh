@@ -28,6 +28,7 @@ NODE_OPTIONS=--use-system-ca npm install --registry=https://registry.npmjs.org
 echo 'Validando aplicação...'
 npm run validate
 node --check src/main.js
+node --check src/access.js
 node --check src/ai.js
 node --check src/catalog.js
 node --check src/transformers-worker.js

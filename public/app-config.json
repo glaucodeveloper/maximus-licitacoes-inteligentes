@@ -11,9 +11,17 @@
   "model": {
     "runtime": "transformers.js",
     "id": "onnx-community/gemma-3-1b-it-ONNX",
-    "dtype": "q4",
+    "dtype": "int8",
     "device": "wasm",
     "maxNumTokens": 256,
     "autoPrepareOnInit": true
+  },
+  "access": {
+    "required": true,
+    "allowedLogins": [
+      "glaucodeveloper"
+    ],
+    "repository": "",
+    "rememberByDefault": true
   }
 }

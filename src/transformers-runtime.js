@@ -1,9 +1,10 @@
 export const TRANSFORMERS_MODEL = Object.freeze({
   id: 'onnx-community/gemma-3-1b-it-ONNX',
-  dtype: 'q4',
-  cacheKey: 'maximus-licitacoes-gemma3-cache',
-  markerKey: 'maximus.licitacoes.gemma3.q4.complete',
-  approximateBytes: 885_000_000,
+  dtype: 'int8',
+  device: 'wasm',
+  cacheKey: 'maximus-licitacoes-gemma3-int8-cache',
+  markerKey: 'maximus.licitacoes.gemma3.int8.complete',
+  approximateBytes: 1_050_000_000,
 });
 
 let client = null;
@@ -59,6 +60,14 @@ class WorkerClient {
     return this.request('load', null, onProgress);
   }
 
+  isCached() {
+    return this.request('cache-status').then(result => Boolean(result?.cached));
+  }
+
+  clearCache() {
+    return this.request('clear-cache');
+  }
+
   generate(messages, maxNewTokens) {
     return this.request('generate', {messages, maxNewTokens});
   }
@@ -77,32 +86,7 @@ function getClient() {
   return client;
 }
 
-function normalizeProgress(info) {
-  if (!info || info.status !== 'progress') return null;
-
-  const received = Number(info.loaded) || 0;
-  const total = Number(info.total) || TRANSFORMERS_MODEL.approximateBytes;
-  const percent = Number(info.progress);
-  const ratio = Number.isFinite(percent) ? percent / 100 : received / total;
-
-  return {
-    received,
-    total,
-    ratio: Math.max(0, Math.min(1, ratio || 0)),
-    file: info.file || '',
-  };
-}
-
-function writeCompleteMarker() {
-  localStorage.setItem(TRANSFORMERS_MODEL.markerKey, JSON.stringify({
-    complete: true,
-    modelId: TRANSFORMERS_MODEL.id,
-    dtype: TRANSFORMERS_MODEL.dtype,
-    completedAt: new Date().toISOString(),
-  }));
-}
-
-export function hasCompleteMarker() {
+function completeMarkerMatches() {
   try {
     const value = JSON.parse(localStorage.getItem(TRANSFORMERS_MODEL.markerKey) || 'null');
     return value?.complete === true &&
@@ -113,18 +97,96 @@ export function hasCompleteMarker() {
   }
 }
 
+function writeCompleteMarker() {
+  localStorage.removeItem('maximus.licitacoes.gemma3.q4.complete');
+  localStorage.setItem(TRANSFORMERS_MODEL.markerKey, JSON.stringify({
+    complete: true,
+    modelId: TRANSFORMERS_MODEL.id,
+    dtype: TRANSFORMERS_MODEL.dtype,
+    completedAt: new Date().toISOString(),
+  }));
+}
+
+function createProgressTracker(onProgress) {
+  const files = new Map();
+  let lastRatio = 0;
+
+  return info => {
+    if (!info) return;
+
+    let received = 0;
+    let total = TRANSFORMERS_MODEL.approximateBytes;
+    let ratio = lastRatio;
+
+    if (info.status === 'progress_total') {
+      received = Number(info.loaded) || 0;
+      total = Number(info.total) || TRANSFORMERS_MODEL.approximateBytes;
+      const percent = Number(info.progress);
+      ratio = Number.isFinite(percent) ? percent / 100 : received / total;
+    } else if (info.status === 'progress' || info.status === 'done') {
+      const file = String(info.file || info.name || 'arquivo');
+      const known = files.get(file) || {loaded: 0, total: 0};
+      const fileTotal = Number(info.total) || known.total || 0;
+      const fileLoaded = info.status === 'done'
+        ? fileTotal
+        : Number(info.loaded) || known.loaded || 0;
+
+      files.set(file, {loaded: fileLoaded, total: fileTotal});
+      received = [...files.values()].reduce((sum, item) => sum + item.loaded, 0);
+      const knownTotal = [...files.values()].reduce((sum, item) => sum + item.total, 0);
+      total = Math.max(TRANSFORMERS_MODEL.approximateBytes, knownTotal);
+      ratio = received / total;
+    } else if (info.status === 'ready') {
+      received = TRANSFORMERS_MODEL.approximateBytes;
+      total = TRANSFORMERS_MODEL.approximateBytes;
+      ratio = 1;
+    } else {
+      return;
+    }
+
+    ratio = Math.max(lastRatio, Math.min(1, Math.max(0, ratio || 0)));
+    lastRatio = ratio;
+
+    onProgress({
+      received,
+      total,
+      ratio,
+      percent: Math.round(ratio * 100),
+    });
+  };
+}
+
+export async function hasCompleteMarker() {
+  const cached = await getClient().isCached().catch(() => false);
+  if (!cached) {
+    localStorage.removeItem(TRANSFORMERS_MODEL.markerKey);
+    return false;
+  }
+
+  if (!completeMarkerMatches()) writeCompleteMarker();
+  return true;
+}
+
 export async function prepareTransformersModel({onProgress = () => {}} = {}) {
   await navigator.storage?.persist?.();
-  await getClient().load(info => {
-    const progress = normalizeProgress(info);
-    if (progress) onProgress(progress);
-  });
+
+  const tracker = createProgressTracker(onProgress);
+  tracker({status: 'progress_total', loaded: 0, total: TRANSFORMERS_MODEL.approximateBytes, progress: 0});
+  await getClient().load(tracker);
+
+  const cached = await getClient().isCached();
+  if (!cached) {
+    localStorage.removeItem(TRANSFORMERS_MODEL.markerKey);
+    throw new Error('O download da inteligência local não foi concluído.');
+  }
+
   writeCompleteMarker();
+  tracker({status: 'ready'});
   return true;
 }
 
 export async function generateTransformersText(messages, {maxNewTokens = 256} = {}) {
-  await prepareTransformersModel();
+  if (!(await hasCompleteMarker())) await prepareTransformersModel();
   return getClient().generate(messages, Math.max(64, Math.min(256, maxNewTokens)));
 }
 
@@ -135,7 +197,9 @@ export async function disposeTransformersRuntime() {
 }
 
 export async function deleteTransformersModel() {
-  await disposeTransformersRuntime();
+  const worker = getClient();
+  await worker.clearCache().catch(() => {});
   localStorage.removeItem(TRANSFORMERS_MODEL.markerKey);
-  if ('caches' in globalThis) await caches.delete(TRANSFORMERS_MODEL.cacheKey);
+  await worker.dispose().catch(() => {});
+  client = null;
 }
